@@ -13,8 +13,7 @@ const CONSUMER_KEY = "TDpigB00hs+zA18cwH2F182jJGyd8xev";
 const CONSUMER_SECRET = "1KpqkfsMaihIc0lhnBo/gBZ5smw=";
 const BASE_URL = "https://cybqa.pesapal.com/pesapalv3";   // Sandbox
 const CALLBACK_URL = "https://appshule.com/payment-success"; // Change to your real frontend success page
-const IPN_URL = "https://pesapal-backend-73lm.onrender.com/api/pesapal/ipn"; // Your Render IPN endpoint
-
+const IPN_URL = "https://pesapal-backend-73lm.onrender.com/api/pesapal/initiate
 // Cache IPN ID after first registration
 let cachedIpnId = null;
 
