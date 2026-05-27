@@ -6,189 +6,85 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --------------------------------------------------------------
-// 1. CONFIGURATION – Uganda Sandbox (from official Pesapal docs)
-// --------------------------------------------------------------
-const CONSUMER_KEY = "TDpigB00hs+zA18cwH2F182jJGyd8xev";
-const CONSUMER_SECRET = "1KpqkfsMaihIc0lhnBo/gBZ5smw=";
-const BASE_URL = "https://cybqa.pesapal.com/pesapalv3";   // Sandbox
-const CALLBACK_URL = "https://appshule.com/payment-success"; // Change to your real frontend success page
-const IPN_URL = "https://pesapal-backend-73lm.onrender.com/api/pesapal/initiate
-// Cache IPN ID after first registration
+// Optional env vars – warn but don't crash
+const CONSUMER_KEY = process.env.PESAPAL_CONSUMER_KEY;
+const CONSUMER_SECRET = process.env.PESAPAL_CONSUMER_SECRET;
+const IS_SANDBOX = process.env.PESAPAL_MODE !== 'production'; // default sandbox
+const BASE_URL = IS_SANDBOX ? "https://cybqa.pesapal.com/pesapalv3" : "https://pay.pesapal.com/v3";
+const CALLBACK_URL = process.env.PESAPAL_CALLBACK_URL || "https://appshule.com/payment-success";
+const IPN_URL = process.env.IPN_URL || "https://pesapal-backend-73lm.onrender.com/api/pesapal/ipn";
+
+if (!CONSUMER_KEY || !CONSUMER_SECRET) {
+    console.warn("⚠️ WARNING: PESAPAL_CONSUMER_KEY or SECRET not set. API calls will fail.");
+    // Do NOT exit – allow server to start so you can see the error in logs
+}
+
+console.log(`Mode: ${IS_SANDBOX ? 'SANDBOX' : 'PRODUCTION'}`);
+console.log(`IPN URL: ${IPN_URL}`);
+
 let cachedIpnId = null;
 
-// --------------------------------------------------------------
-// 2. HELPER: Get Access Token from Pesapal
-// --------------------------------------------------------------
 async function getAccessToken() {
-    try {
-        const response = await axios.post(`${BASE_URL}/api/Auth/RequestToken`, {
-            consumer_key: CONSUMER_KEY,
-            consumer_secret: CONSUMER_SECRET
-        }, {
-            headers: { 'Content-Type': 'application/json' }
-        });
-        const token = response.data.token;
-        console.log("✅ Access token obtained");
-        return token;
-    } catch (error) {
-        console.error("❌ Failed to get access token:", error.response?.data || error.message);
-        throw new Error("Token fetch failed");
-    }
+    if (!CONSUMER_KEY || !CONSUMER_SECRET) throw new Error("Missing credentials");
+    const res = await axios.post(`${BASE_URL}/api/Auth/RequestToken`, {
+        consumer_key: CONSUMER_KEY,
+        consumer_secret: CONSUMER_SECRET
+    });
+    return res.data.token;
 }
 
-// --------------------------------------------------------------
-// 3. HELPER: Register IPN (runs once, stores ID)
-// --------------------------------------------------------------
 async function registerIPN() {
-    if (cachedIpnId) {
-        console.log("ℹ️ Using cached IPN ID:", cachedIpnId);
-        return cachedIpnId;
-    }
-
-    try {
-        const token = await getAccessToken();
-        const response = await axios.post(`${BASE_URL}/api/URLSetup/RegisterIPN`, {
-            url: IPN_URL,
-            ipn_notification_type: "POST"
-        }, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        cachedIpnId = response.data.ipn_id;
-        console.log("✅ IPN registered successfully. ID:", cachedIpnId);
-        return cachedIpnId;
-    } catch (error) {
-        console.error("❌ IPN registration failed:", error.response?.data || error.message);
-        throw new Error("IPN registration failed");
-    }
+    if (cachedIpnId) return cachedIpnId;
+    const token = await getAccessToken();
+    const res = await axios.post(`${BASE_URL}/api/URLSetup/RegisterIPN`, {
+        url: IPN_URL,
+        ipn_notification_type: "POST"
+    }, { headers: { Authorization: `Bearer ${token}` } });
+    cachedIpnId = res.data.ipn_id;
+    console.log("✅ IPN registered:", cachedIpnId);
+    return cachedIpnId;
 }
 
-// --------------------------------------------------------------
-// 4. ENDPOINT: Initiate Payment (called by your frontend)
-// --------------------------------------------------------------
 app.post('/api/pesapal/initiate', async (req, res) => {
     try {
-        const { amount, currency, email, reference } = req.body;
-
-        // Validate required fields
-        if (!amount || !currency || !email) {
-            return res.status(400).json({ 
-                error: "Missing required fields. Need amount, currency, email." 
-            });
-        }
-
-        // Ensure IPN is registered (first call will register, subsequent calls use cache)
-        const notification_id = await registerIPN();
-
-        // Get a fresh token for this transaction
+        const { amount, currency, email } = req.body;
+        if (!amount || !currency || !email) return res.status(400).json({ error: "Missing fields" });
+        const ipnId = await registerIPN();
         const token = await getAccessToken();
-
-        // Build order payload as per Pesapal API v3
-        const orderData = {
-            id: reference || `ORDER_${Date.now()}`,
+        const order = {
+            id: `ORDER_${Date.now()}`,
             currency: currency.toUpperCase(),
             amount: Number(amount),
             description: "APSHULE Subscription",
             callback_url: CALLBACK_URL,
-            notification_id: notification_id,
-            billing_address: {
-                email_address: email,
-                phone_number: "0700000000",   // Dummy – change if you collect phone
-                country_code: "UG",
-                first_name: "Customer",
-                last_name: "",
-                line1: "Kampala"
-            }
+            notification_id: ipnId,
+            billing_address: { email_address: email, country_code: "UG" }
         };
-
-        console.log("📤 Submitting order:", orderData);
-
-        // Submit order to Pesapal
-        const submitResponse = await axios.post(`${BASE_URL}/api/Transactions/SubmitOrderRequest`, orderData, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            }
+        const submit = await axios.post(`${BASE_URL}/api/Transactions/SubmitOrderRequest`, order, {
+            headers: { Authorization: `Bearer ${token}` }
         });
-
-        console.log("✅ Order submitted. Redirect URL:", submitResponse.data.redirect_url);
-
-        // Return the redirect URL to your frontend
-        res.json({
-            success: true,
-            redirect_url: submitResponse.data.redirect_url,
-            order_tracking_id: submitResponse.data.order_tracking_id,
-            merchant_reference: orderData.id
-        });
-
-    } catch (error) {
-        // Detailed error logging for debugging
-        const pesapalError = error.response?.data;
-        console.error("❌ Payment initiation failed:");
-        console.error("Status:", error.response?.status);
-        console.error("Error details:", pesapalError || error.message);
-
-        // Send a clean error to the frontend
-        res.status(500).json({
-            error: "Payment initiation failed",
-            details: pesapalError?.message || error.message
-        });
+        res.json({ redirect_url: submit.data.redirect_url });
+    } catch (err) {
+        console.error("Initiate error:", err.response?.data || err.message);
+        res.status(500).json({ error: err.response?.data?.message || "Payment initiation failed" });
     }
 });
 
-// --------------------------------------------------------------
-// 5. ENDPOINT: IPN Callback (Pesapal sends payment status here)
-// --------------------------------------------------------------
-app.post('/api/pesapal/ipn', async (req, res) => {
-    console.log("📨 IPN received at", new Date().toISOString());
-    console.log("Query params:", req.query);
-    console.log("Body:", req.body);
-
-    // IMPORTANT: You must verify the payment status by calling Pesapal's
-    // getTransactionStatus endpoint using the OrderTrackingId from req.query.
-    // Then update your database (mark subscription as paid).
-    // For now, we just acknowledge receipt.
-
-    // Pesapal expects a 200 OK with a specific JSON response to stop retries
-    res.status(200).json({ status: "200", message: "IPN processed successfully" });
+app.post('/api/pesapal/ipn', (req, res) => {
+    console.log("IPN hit", req.query, req.body);
+    res.sendStatus(200);
 });
 
-// --------------------------------------------------------------
-// 6. TEST ENDPOINT: Check IPN registration (handy for debugging)
-// --------------------------------------------------------------
 app.get('/debug/ipn', async (req, res) => {
     try {
-        const ipnId = await registerIPN();
-        res.json({ 
-            success: true, 
-            ipn_id: ipnId,
-            message: "IPN is registered. You can now initiate payments."
-        });
+        const id = await registerIPN();
+        res.json({ success: true, ipn_id: id });
     } catch (err) {
-        res.status(500).json({ 
-            success: false, 
-            error: err.message 
-        });
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// --------------------------------------------------------------
-// 7. HEALTH CHECK (for Render)
-// --------------------------------------------------------------
-app.get('/', (req, res) => {
-    res.send('✅ Pesapal backend is running. Use /api/pesapal/initiate to start a payment.');
-});
+app.get('/', (req, res) => res.send('Pesapal backend running'));
 
-// --------------------------------------------------------------
-// 8. START SERVER
-// --------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌍 IPN URL will be: ${IPN_URL}`);
-    console.log(`🔑 Using sandbox: ${BASE_URL}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
