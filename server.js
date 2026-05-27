@@ -10,7 +10,7 @@ const CONSUMER_KEY = "7mosYMwsJ5Sla3A7DlyA2vFO+L6Ke1xq";
 const CONSUMER_SECRET = "GFo48ikRkNEYI90phe1xuk7TpWM=";
 const IS_SANDBOX = true;
 const BASE_URL = IS_SANDBOX ? "https://cybqa.pesapal.com/pesapalv3" : "https://pay.pesapal.com/v3";
-const CALLBACK_URL = "https://appshule.com/
+const CALLBACK_URL = "https://appshule.com/";
 
 let accessToken = null;
 let tokenExpiry = 0;
