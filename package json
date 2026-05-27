@@ -1,7 +1,7 @@
 {
   "name": "pesapal-backend",
   "version": "1.0.0",
-  "description": "Pesapal payment gateway backend for APSHULE",
+  "description": "Pesapal payment gateway backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
