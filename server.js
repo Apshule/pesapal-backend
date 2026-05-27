@@ -6,11 +6,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const CONSUMER_KEY = "7mosYMwsJ5Sla3A7DlyA2vFO+L6Ke1xq";
-const CONSUMER_SECRET = "GFo48ikRkNEYI90phe1xuk7TpWM=";
-const IS_SANDBOX = true;
+// Read from environment variables (set in Render)
+const CONSUMER_KEY = process.env.PESAPAL_CONSUMER_KEY;
+const CONSUMER_SECRET = process.env.PESAPAL_CONSUMER_SECRET;
+const IS_SANDBOX = process.env.PESAPAL_MODE !== 'production';
 const BASE_URL = IS_SANDBOX ? "https://cybqa.pesapal.com/pesapalv3" : "https://pay.pesapal.com/v3";
-const CALLBACK_URL = "https://appshule.com/";
+const CALLBACK_URL = process.env.PESAPAL_CALLBACK_URL || "https://appshule.com/";
 
 let accessToken = null;
 let tokenExpiry = 0;
@@ -29,20 +30,42 @@ async function getAccessToken() {
 app.post('/api/pesapal/initiate', async (req, res) => {
     try {
         const { amount, currency, description, email, phone, name, reference } = req.body;
-        if (!amount || !currency || !email) return res.status(400).json({ error: "Missing fields" });
+        if (!amount || !currency || !email) {
+            return res.status(400).json({ error: "Missing fields" });
+        }
         const token = await getAccessToken();
         const orderData = {
-            id: reference, currency, amount, description, callback_url: CALLBACK_URL, notification_id: null,
-            billing_address: { email_address: email, phone_number: phone || "N/A", country_code: "UG",
-                first_name: (name && name.split(' ')[0]) || "User", middle_name: "", last_name: (name && name.split(' ')[1]) || "",
-                line1: "Kampala", city: "Kampala", state: "Kampala", postal_code: "256", zip_code: "256" }
+            id: reference,
+            currency,
+            amount,
+            description,
+            callback_url: CALLBACK_URL,
+            notification_id: null,
+            billing_address: {
+                email_address: email,
+                phone_number: phone || "N/A",
+                country_code: "UG",
+                first_name: (name && name.split(' ')[0]) || "User",
+                middle_name: "",
+                last_name: (name && name.split(' ')[1]) || "",
+                line1: "Kampala",
+                city: "Kampala",
+                state: "Kampala",
+                postal_code: "256",
+                zip_code: "256"
+            }
         };
         const response = await axios.post(`${BASE_URL}/api/Transactions/SubmitOrderRequest`, orderData, {
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
         });
-        res.json({ redirect_url: response.data.redirect_url, order_tracking_id: response.data.order_tracking_id, merchant_reference: reference });
+        res.json({
+            redirect_url: response.data.redirect_url,
+            order_tracking_id: response.data.order_tracking_id,
+            merchant_reference: reference
+        });
     } catch (err) {
-        res.status(500).json({ error: "Payment initiation failed" });
+        console.error("Pesapal error:", err.response?.data || err.message);
+        res.status(500).json({ error: err.response?.data?.message || "Payment initiation failed" });
     }
 });
 
@@ -55,6 +78,7 @@ app.post('/api/pesapal/status', async (req, res) => {
         });
         res.json({ status: response.data.payment_status_description });
     } catch (err) {
+        console.error("Status error:", err.message);
         res.status(500).json({ error: "Failed to get payment status" });
     }
 });
