@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Read from environment variables (set in Render)
+// Read from environment variables
 const CONSUMER_KEY = process.env.PESAPAL_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.PESAPAL_CONSUMER_SECRET;
 const IS_SANDBOX = process.env.PESAPAL_MODE !== 'production';
@@ -16,15 +16,23 @@ const CALLBACK_URL = process.env.PESAPAL_CALLBACK_URL || "https://appshule.com/"
 let accessToken = null;
 let tokenExpiry = 0;
 
+// ✅ FIXED: API v3 authentication – send keys in body, not Basic Auth
 async function getAccessToken() {
     if (accessToken && Date.now() < tokenExpiry) return accessToken;
-    const auth = Buffer.from(`${CONSUMER_KEY}:${CONSUMER_SECRET}`).toString('base64');
-    const response = await axios.post(`${BASE_URL}/api/Auth/RequestToken`, {}, {
-        headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' }
-    });
-    accessToken = response.data.token;
-    tokenExpiry = Date.now() + (response.data.expires_in * 1000) - 60000;
-    return accessToken;
+    try {
+        const response = await axios.post(`${BASE_URL}/api/Auth/RequestToken`, {
+            consumer_key: CONSUMER_KEY,
+            consumer_secret: CONSUMER_SECRET
+        }, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+        accessToken = response.data.token;
+        tokenExpiry = Date.now() + 55 * 60 * 1000; // 55 minutes
+        return accessToken;
+    } catch (err) {
+        console.error("Token error:", err.response?.data || err.message);
+        throw err;
+    }
 }
 
 app.post('/api/pesapal/initiate', async (req, res) => {
@@ -40,7 +48,7 @@ app.post('/api/pesapal/initiate', async (req, res) => {
             amount,
             description,
             callback_url: CALLBACK_URL,
-            notification_id: null,
+            notification_id: null, // You can register IPN later, but null works for sandbox
             billing_address: {
                 email_address: email,
                 phone_number: phone || "N/A",
