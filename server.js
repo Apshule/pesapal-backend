@@ -6,17 +6,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Read from environment variables
+// Read from environment variables (set in Render)
 const CONSUMER_KEY = process.env.PESAPAL_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.PESAPAL_CONSUMER_SECRET;
 const IS_SANDBOX = process.env.PESAPAL_MODE !== 'production';
 const BASE_URL = IS_SANDBOX ? "https://cybqa.pesapal.com/pesapalv3" : "https://pay.pesapal.com/v3";
-const CALLBACK_URL = process.env.PESAPAL_CALLBACK_URL || "https://appshule.com/";
+const CALLBACK_URL = process.env.PESAPAL_CALLBACK_URL || "https://webhook.site";
 
 let accessToken = null;
 let tokenExpiry = 0;
 
-// ✅ FIXED: API v3 authentication – send keys in body, not Basic Auth
+// ✅ Correct API v3 authentication: send credentials in JSON body
 async function getAccessToken() {
     if (accessToken && Date.now() < tokenExpiry) return accessToken;
     try {
@@ -27,10 +27,13 @@ async function getAccessToken() {
             headers: { 'Content-Type': 'application/json' }
         });
         accessToken = response.data.token;
-        tokenExpiry = Date.now() + 55 * 60 * 1000; // 55 minutes
+        // Expiry: use expires_in if provided, otherwise default 55 minutes
+        const expiresIn = response.data.expires_in || 3600;
+        tokenExpiry = Date.now() + (expiresIn - 60) * 1000;
+        console.log("✅ Pesapal token obtained");
         return accessToken;
     } catch (err) {
-        console.error("Token error:", err.response?.data || err.message);
+        console.error("❌ Token error:", err.response?.data || err.message);
         throw err;
     }
 }
@@ -39,16 +42,18 @@ app.post('/api/pesapal/initiate', async (req, res) => {
     try {
         const { amount, currency, description, email, phone, name, reference } = req.body;
         if (!amount || !currency || !email) {
-            return res.status(400).json({ error: "Missing fields" });
+            return res.status(400).json({ error: "Missing required fields: amount, currency, email" });
         }
+
         const token = await getAccessToken();
+
         const orderData = {
-            id: reference,
-            currency,
-            amount,
-            description,
+            id: reference || `SUB_${Date.now()}`,
+            currency: currency.toUpperCase(),
+            amount: Number(amount),
+            description: description || "APSHULE Subscription",
             callback_url: CALLBACK_URL,
-            notification_id: null, // You can register IPN later, but null works for sandbox
+            notification_id: null, // Can be set after IPN registration
             billing_address: {
                 email_address: email,
                 phone_number: phone || "N/A",
@@ -63,16 +68,18 @@ app.post('/api/pesapal/initiate', async (req, res) => {
                 zip_code: "256"
             }
         };
+
         const response = await axios.post(`${BASE_URL}/api/Transactions/SubmitOrderRequest`, orderData, {
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
         });
+
         res.json({
             redirect_url: response.data.redirect_url,
             order_tracking_id: response.data.order_tracking_id,
-            merchant_reference: reference
+            merchant_reference: orderData.id
         });
     } catch (err) {
-        console.error("Pesapal error:", err.response?.data || err.message);
+        console.error("Pesapal initiate error:", err.response?.data || err.message);
         res.status(500).json({ error: err.response?.data?.message || "Payment initiation failed" });
     }
 });
@@ -80,13 +87,15 @@ app.post('/api/pesapal/initiate', async (req, res) => {
 app.post('/api/pesapal/status', async (req, res) => {
     try {
         const { order_tracking_id } = req.body;
+        if (!order_tracking_id) return res.status(400).json({ error: "Missing order_tracking_id" });
+
         const token = await getAccessToken();
         const response = await axios.get(`${BASE_URL}/api/Transactions/GetTransactionStatus?orderTrackingId=${order_tracking_id}`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
         res.json({ status: response.data.payment_status_description });
     } catch (err) {
-        console.error("Status error:", err.message);
+        console.error("Status error:", err.response?.data || err.message);
         res.status(500).json({ error: "Failed to get payment status" });
     }
 });
